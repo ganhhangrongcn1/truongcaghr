@@ -2,6 +2,8 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createClient } from "@supabase/supabase-js";
 import {
   AlarmClock,
+  Bell,
+  BellOff,
   Clock3,
   ListOrdered,
   Phone,
@@ -628,11 +630,25 @@ export default function App() {
   const [activeDishKey, setActiveDishKey] = useState(null);
   const [activeOrderId, setActiveOrderId] = useState(null);
   const [pendingOrderIds, setPendingOrderIds] = useState({});
+  const [soundEnabled, setSoundEnabled] = useState(false);
+  const [newOrderCount, setNewOrderCount] = useState(0);
+  const [soundVolume, setSoundVolume] = useState(() => {
+    if (typeof window === "undefined") return 0.22;
+    const saved = window.localStorage.getItem("kitchen_sound_volume");
+    const value = saved ? Number(saved) : 0.22;
+    return Number.isFinite(value) ? value : 0.22;
+  });
 
   const orderRefs = useRef({});
   const groupedDishRefs = useRef({});
   const groupedScrollRef = useRef(null);
   const lastLocalUpdateRef = useRef(0);
+  const audioContextRef = useRef(null);
+  const titleFlashIntervalRef = useRef(null);
+  const originalTitleRef = useRef(
+    typeof document !== "undefined" ? document.title : "Bảng bếp realtime"
+  );
+  const lastSoundTimeRef = useRef(0);
 
   const BASE_WIDTH = 1440;
   const BASE_HEIGHT = 900;
@@ -641,6 +657,123 @@ export default function App() {
     width: typeof window !== "undefined" ? window.innerWidth : BASE_WIDTH,
     height: typeof window !== "undefined" ? window.innerHeight : BASE_HEIGHT,
   });
+
+  async function unlockAudio() {
+    try {
+      if (typeof window === "undefined") return;
+
+      const AudioContextClass =
+        window.AudioContext || window.webkitAudioContext;
+
+      if (!AudioContextClass) return;
+
+      if (!audioContextRef.current) {
+        audioContextRef.current = new AudioContextClass();
+      }
+
+      if (audioContextRef.current.state === "suspended") {
+        await audioContextRef.current.resume();
+      }
+
+      setSoundEnabled(true);
+      window.localStorage.setItem("kitchen_sound_enabled", "1");
+      setError("");
+    } catch (err) {
+      setError("Trình duyệt đang chặn âm thanh. Hãy bấm lại nút Bật chuông.");
+    }
+  }
+
+  function stopTitleFlash() {
+    if (titleFlashIntervalRef.current) {
+      clearInterval(titleFlashIntervalRef.current);
+      titleFlashIntervalRef.current = null;
+    }
+    if (typeof document !== "undefined") {
+      document.title = originalTitleRef.current;
+    }
+  }
+
+  function startTitleFlash(count) {
+    if (typeof document === "undefined") return;
+
+    stopTitleFlash();
+
+    let showingAlert = true;
+    document.title = `(${count}) Đơn mới!`;
+
+    titleFlashIntervalRef.current = setInterval(() => {
+      document.title = showingAlert
+        ? `(${count}) Đơn mới!`
+        : originalTitleRef.current;
+      showingAlert = !showingAlert;
+    }, 1000);
+  }
+
+  async function playNewOrderSound() {
+    try {
+      if (!soundEnabled) return;
+      if (typeof window === "undefined") return;
+
+      const nowMs = Date.now();
+      if (nowMs - lastSoundTimeRef.current < 1200) return;
+      lastSoundTimeRef.current = nowMs;
+
+      const AudioContextClass =
+        window.AudioContext || window.webkitAudioContext;
+
+      if (!AudioContextClass) return;
+
+      if (!audioContextRef.current) {
+        audioContextRef.current = new AudioContextClass();
+      }
+
+      const ctx = audioContextRef.current;
+
+      if (ctx.state === "suspended") {
+        await ctx.resume();
+      }
+
+      const nowTime = ctx.currentTime;
+      const v1 = Math.max(0.01, Math.min(soundVolume, 0.6));
+      const v2 = Math.max(0.01, Math.min(soundVolume * 0.85, 0.5));
+
+      const osc1 = ctx.createOscillator();
+      const gain1 = ctx.createGain();
+
+      osc1.type = "sine";
+      osc1.frequency.setValueAtTime(880, nowTime);
+      osc1.frequency.exponentialRampToValueAtTime(1320, nowTime + 0.12);
+
+      gain1.gain.setValueAtTime(0.0001, nowTime);
+      gain1.gain.exponentialRampToValueAtTime(v1, nowTime + 0.02);
+      gain1.gain.exponentialRampToValueAtTime(0.0001, nowTime + 0.22);
+
+      osc1.connect(gain1);
+      gain1.connect(ctx.destination);
+
+      osc1.start(nowTime);
+      osc1.stop(nowTime + 0.24);
+
+      const osc2 = ctx.createOscillator();
+      const gain2 = ctx.createGain();
+
+      osc2.type = "sine";
+      osc2.frequency.setValueAtTime(990, nowTime + 0.16);
+      osc2.frequency.exponentialRampToValueAtTime(1480, nowTime + 0.3);
+
+      gain2.gain.setValueAtTime(0.0001, nowTime + 0.16);
+      gain2.gain.exponentialRampToValueAtTime(v2, nowTime + 0.18);
+      gain2.gain.exponentialRampToValueAtTime(0.0001, nowTime + 0.38);
+
+      osc2.connect(gain2);
+      gain2.connect(ctx.destination);
+
+      osc2.start(nowTime + 0.16);
+      osc2.stop(nowTime + 0.4);
+    } catch (err) {
+      console.error("Không phát được chuông:", err);
+    }
+  }
 
   useEffect(() => {
     function handleResize() {
@@ -652,6 +785,51 @@ export default function App() {
 
     window.addEventListener("resize", handleResize);
     return () => window.removeEventListener("resize", handleResize);
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem("kitchen_sound_enabled", soundEnabled ? "1" : "0");
+  }, [soundEnabled]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem("kitchen_sound_volume", String(soundVolume));
+  }, [soundVolume]);
+
+  useEffect(() => {
+    async function restoreSoundPreference() {
+      if (typeof window === "undefined") return;
+
+      const savedEnabled =
+        window.localStorage.getItem("kitchen_sound_enabled") === "1";
+      if (!savedEnabled) return;
+
+      try {
+        const AudioContextClass =
+          window.AudioContext || window.webkitAudioContext;
+
+        if (!AudioContextClass) return;
+
+        if (!audioContextRef.current) {
+          audioContextRef.current = new AudioContextClass();
+        }
+
+        if (audioContextRef.current.state === "suspended") {
+          try {
+            await audioContextRef.current.resume();
+          } catch (e) {}
+        }
+
+        if (audioContextRef.current.state === "running") {
+          setSoundEnabled(true);
+        }
+      } catch (err) {
+        console.error("Không khôi phục được âm thanh:", err);
+      }
+    }
+
+    restoreSoundPreference();
   }, []);
 
   const isTablet = viewport.width <= 1024;
@@ -688,10 +866,16 @@ export default function App() {
       .channel("orders-realtime")
       .on(
         "postgres_changes",
-        { event: "*", schema: "public", table: "orders" },
-        () => {
-          const nowTs = Date.now();
-          if (nowTs - lastLocalUpdateRef.current < 1200) return;
+        { event: "INSERT", schema: "public", table: "orders" },
+        async () => {
+          await playNewOrderSound();
+
+          setNewOrderCount((prev) => {
+            const next = prev + 1;
+            startTitleFlash(next);
+            return next;
+          });
+
           loadOrders();
         }
       )
@@ -701,11 +885,24 @@ export default function App() {
       alive = false;
       supabase.removeChannel(channel);
     };
-  }, []);
+  }, [soundEnabled, soundVolume]);
 
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 60000);
     return () => clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    function handleWindowFocus() {
+      setNewOrderCount(0);
+      stopTitleFlash();
+    }
+
+    window.addEventListener("focus", handleWindowFocus);
+    return () => {
+      window.removeEventListener("focus", handleWindowFocus);
+      stopTitleFlash();
+    };
   }, []);
 
   const filteredOrders = useMemo(() => {
@@ -1071,7 +1268,11 @@ export default function App() {
 
                   <Button
                     variant={platformFilter === "all" ? "default" : "outline"}
-                    onClick={() => setPlatformFilter("all")}
+                    onClick={() => {
+                      setPlatformFilter("all");
+                      setNewOrderCount(0);
+                      stopTitleFlash();
+                    }}
                   >
                     Tất cả
                   </Button>
@@ -1136,6 +1337,82 @@ export default function App() {
                   <Button variant="outline" onClick={() => setDateFilter("")}>
                     Bỏ lọc ngày
                   </Button>
+
+                  <Button
+                    variant={soundEnabled ? "default" : "outline"}
+                    onClick={async () => {
+                      if (soundEnabled) {
+                        setSoundEnabled(false);
+                        if (typeof window !== "undefined") {
+                          window.localStorage.setItem("kitchen_sound_enabled", "0");
+                        }
+                        return;
+                      }
+                      await unlockAudio();
+                    }}
+                  >
+                    {soundEnabled ? (
+                      <Bell size={16} style={{ marginRight: 6 }} />
+                    ) : (
+                      <BellOff size={16} style={{ marginRight: 6 }} />
+                    )}
+                    {soundEnabled ? "Tắt chuông" : "Bật chuông"}
+                    {newOrderCount > 0 ? ` (${newOrderCount})` : ""}
+                  </Button>
+
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 8,
+                      padding: "0 10px",
+                      background: "#fff",
+                      border: "1px solid #cbd5e1",
+                      borderRadius: 10,
+                      height: 42,
+                    }}
+                  >
+                    <span
+                      style={{
+                        fontSize: 13,
+                        fontWeight: 700,
+                        color: "#334155",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      Âm lượng
+                    </span>
+                    <input
+                      type="range"
+                      min="0.05"
+                      max="0.5"
+                      step="0.01"
+                      value={soundVolume}
+                      onChange={(e) => setSoundVolume(Number(e.target.value))}
+                      style={{ width: 120 }}
+                    />
+                    <span
+                      style={{
+                        fontSize: 12,
+                        color: "#64748b",
+                        minWidth: 28,
+                        textAlign: "right",
+                      }}
+                    >
+                      {Math.round(soundVolume * 100)}
+                    </span>
+                  </div>
+
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      setNewOrderCount(0);
+                      stopTitleFlash();
+                    }}
+                  >
+                    Đã xem đơn mới
+                  </Button>
+
                   <Button variant="outline" onClick={() => window.location.reload()}>
                     <RefreshCcw size={16} style={{ marginRight: 6 }} />
                     Tải lại
