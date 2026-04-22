@@ -1386,7 +1386,7 @@ export default function App() {
                     Bảng bếp realtime
                   </div>
                   <div style={{ color: "#64748b", fontSize: 13, marginTop: 4 }}>
-                    APP nhận đơn • Chi nhánh 306A Lê Hồng Phong
+                    APP nhận đơn • Chi nhánh 30/4
                   </div>
                 </div>
 
