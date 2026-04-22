@@ -179,6 +179,8 @@ const supabaseUrl = "https://nobemjcugpxczqtqocai.supabase.co";
 const supabaseAnonKey = "sb_publishable_7SiQ4eq7-gUorVG2OC0qxg_wKfSM3CW";
 const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
+const TARGET_HUB_ID = "69e18c814673b293b04be1ab"; // Chi nhánh 30/4
+
 function formatPlatformOrderCode(platform, maDonSan) {
   const raw = String(maDonSan || "").trim();
   if (!raw) return "Không có mã sàn";
@@ -832,6 +834,7 @@ export default function App() {
         const { data, error } = await supabase
           .from("orders")
           .select("*")
+          .eq("hub_id", TARGET_HUB_ID)
           .order("thoi_gian", { ascending: false });
 
         if (error) throw error;
@@ -855,6 +858,9 @@ export default function App() {
         "postgres_changes",
         { event: "INSERT", schema: "public", table: "orders" },
         async (payload) => {
+          const insertedHubId = String(payload?.new?.hub_id || "").trim();
+          if (insertedHubId !== TARGET_HUB_ID) return;
+
           const newId = payload?.new?.id;
 
           setUnseenOrderIds((prev) => {
@@ -904,6 +910,7 @@ export default function App() {
 
     return orders
       .map((order) => computeOrderState(order, now))
+      .filter((order) => String(order.hub_id || "").trim() === TARGET_HUB_ID)
       .filter((order) => {
         const platform = String(order?.nen_tang || "").toLowerCase();
         if (platformFilter === "grab" && !platform.includes("grab")) return false;
@@ -1072,7 +1079,8 @@ export default function App() {
           trang_thai: updatedOrder.trang_thai,
           completed_at: updatedOrder.completed_at,
         })
-        .eq("id", orderId);
+        .eq("id", orderId)
+        .eq("hub_id", TARGET_HUB_ID);
 
       if (error) throw error;
     } catch (err) {
@@ -1117,7 +1125,8 @@ export default function App() {
           trang_thai: "FINISH",
           completed_at: doneAt,
         })
-        .eq("id", orderId);
+        .eq("id", orderId)
+        .eq("hub_id", TARGET_HUB_ID);
 
       if (error) throw error;
     } catch (err) {
@@ -1170,7 +1179,8 @@ export default function App() {
           trang_thai: "DOING",
           completed_at: null,
         })
-        .eq("id", orderId);
+        .eq("id", orderId)
+        .eq("hub_id", TARGET_HUB_ID);
 
       if (error) throw error;
     } catch (err) {
@@ -1266,7 +1276,7 @@ export default function App() {
                     Bảng bếp realtime
                   </div>
                   <div style={{ color: "#64748b", fontSize: 13, marginTop: 4 }}>
-                    Tối ưu ngang cho iPad Gen 5
+                    Tối ưu ngang cho iPad Gen 5 • Chi nhánh 30/4
                   </div>
                 </div>
 
@@ -1437,9 +1447,6 @@ export default function App() {
                   onClick={() => setOrderStateFilter("all")}
                 >
                   Tất cả trạng thái
-                </Button>
-                <Button variant="outline" onClick={() => setDateFilter("")}>
-                  Bỏ lọc ngày
                 </Button>
               </div>
             </CardContent>
@@ -1631,15 +1638,24 @@ export default function App() {
                                 ...activeTheme.accentStyle,
                               }}
                             >
-                              <Store size={15} />
-                              {formatPlatformOrderCode(order.nen_tang, order.ma_don_san)}
+                              <Store size={16} />
+                              <span
+                                style={{
+                                  fontSize: 18,
+                                  fontWeight: 800,
+                                  letterSpacing: 0.5,
+                                  color: activeTheme.accentStyle?.color || "#0f172a",
+                                }}
+                              >
+                                {formatPlatformOrderCode(order.nen_tang, order.ma_don_san)}
+                              </span>
                             </div>
                             <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                               <Phone size={15} />
                               <span>
-    {order.khach_hang || "Không tên"}
-    {order.sdt ? ` - ${order.sdt}` : ""}
-  </span>
+                                {order.khach_hang || "Không tên"}
+                                {order.sdt ? ` - ${order.sdt}` : ""}
+                              </span>
                             </div>
                             <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                               <Clock3 size={15} />
